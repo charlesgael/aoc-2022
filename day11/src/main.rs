@@ -1,4 +1,10 @@
-use std::ops::{Index, IndexMut};
+use core::time;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::{
+    ops::{Index, IndexMut},
+    process::Command,
+    thread,
+};
 
 fn file(path: &str) -> Vec<Vec<String>> {
     std::fs::read_to_string(path)
@@ -16,73 +22,58 @@ fn file(path: &str) -> Vec<Vec<String>> {
 struct Game(Vec<Monkey>);
 
 impl Game {
-    fn get_round(&mut self, index: usize) -> Vec<Vec<u128>> {
-        if self.0.iter().all(|it| it.items.len() > index) {
+    fn get_round_inspections(&self, index: usize, releaf: bool) -> Vec<usize> {
+        let mut round = self.0.iter().map(|it| it.items.clone()).collect::<Vec<_>>();
+        let mut inspections = self.0.iter().map(|_| 0).collect::<Vec<_>>();
+        let factor = self
+            .0
+            .iter()
+            .map(|it| it.test.divisible)
+            .fold(1, |acc, it| acc * it);
+
+        let bar = ProgressBar::new(index as u64);
+        bar.set_style(
+            ProgressStyle::with_template("[{bar:40.cyan/blue}] {pos:>7}/{len:7} {msg}")
+                .unwrap()
+                .progress_chars("=> "),
+        );
+
+        for round_idx in 0..index {
+            // println!("Round {:.1} %", round_idx as f64 / index as f64 * 100f64);
+
             // println!("# Round {}", index);
-            // println!("Already calculated");
-            self.0
-                .iter()
-                .map(|it| it.items.index(index).clone())
-                .collect::<Vec<Vec<_>>>()
-        } else {
-            let mut round_idx = self
-                .0
-                .iter()
-                .fold(usize::MAX, |acc, it| std::cmp::min(acc, it.items.len()))
-                - 1;
+            for (idx_monkey, monkey) in self.0.iter().enumerate() {
+                // println!("Monkey {}:", idx_monkey);
+                for _idx_item in 0..round.index(idx_monkey).len() {
+                    *inspections.index_mut(idx_monkey) += 1;
+                    let item = round[idx_monkey].remove(0);
+                    // println!("  Monkey inspects an item with a worry level of {}.", item);
+                    let result = monkey.operation.exec(&item) % factor;
+                    // println!("    Worry level {} to {}.", monkey.operation, result);
 
-            let mut next_round = self.get_round(round_idx);
+                    // part 2 no longer divides (uncomment for part 1)
+                    let bored = if releaf { result / 3 } else { result };
 
-            while round_idx < index {
-                println!("Round {:.1} %", round_idx as f64 / index as f64 * 100f64);
+                    // println!(
+                    //     "    Monkey gets bored with item. Worry level is divided by 3 to {}.",
+                    //     bored
+                    // );
+                    let dest_monkey = monkey.test.monkey_for(&bored);
+                    // println!(
+                    //     "    Item with worry level {} is thrown to monkey {}.",
+                    //     bored, dest_monkey
+                    // );
 
-                // println!("# Round {}", index);
-                for (idx_monkey, monkey) in self.0.iter_mut().enumerate() {
-                    // println!("Monkey {}:", idx_monkey);
-                    for _idx_item in 0..next_round.index(idx_monkey).len() {
-                        monkey.inspections += 1;
-                        let item = next_round[idx_monkey].remove(0);
-                        // println!("  Monkey inspects an item with a worry level of {}.", item);
-                        let result = monkey.operation.exec(&item);
-                        // println!("    Worry level {} to {}.", monkey.operation, result);
-
-                        // part 2 no longer divides (uncomment for part 1)
-                        let bored = result; // 3;
-
-                        // println!(
-                        //     "    Monkey gets bored with item. Worry level is divided by 3 to {}.",
-                        //     bored
-                        // );
-                        let dest_monkey = monkey.test.monkey_for(bored.clone());
-                        // println!(
-                        //     "    Item with worry level {} is thrown to monkey {}.",
-                        //     bored, dest_monkey
-                        // );
-
-                        next_round[dest_monkey].push(bored.clone());
-                    }
+                    round[dest_monkey].push(bored);
                 }
-
-                for (idx, mon) in next_round.iter().enumerate() {
-                    self.0.index_mut(idx).items.push(mon.to_vec());
-                }
-
-                round_idx += 1;
             }
 
-            println!("Finished");
-
-            next_round
+            bar.inc(1);
         }
-    }
 
-    fn get_inspections(&mut self, index: usize) -> Vec<usize> {
-        self.get_round(index);
+        bar.finish();
 
-        self.0
-            .iter()
-            .map(|it| it.inspections)
-            .collect::<Vec<usize>>()
+        inspections
     }
 }
 
@@ -91,9 +82,7 @@ struct Monkey {
     operation: Operation,
     test: Test,
 
-    // Items per round
-    items: Vec<Vec<u128>>,
-    inspections: usize,
+    items: Vec<u128>,
 }
 
 impl From<&Vec<String>> for Monkey {
@@ -123,8 +112,7 @@ impl From<&Vec<String>> for Monkey {
         Self {
             operation,
             test,
-            items: vec![starting],
-            inspections: 0,
+            items: starting,
         }
     }
 }
@@ -231,8 +219,8 @@ impl From<Vec<String>> for Test {
 }
 
 impl Test {
-    fn monkey_for(&self, num: u128) -> usize {
-        if num % u128::from(self.divisible) == 0 {
+    fn monkey_for(&self, num: &u128) -> usize {
+        if num % self.divisible == 0 {
             self.monkey_ok
         } else {
             self.monkey_ko
@@ -250,14 +238,14 @@ fn main() {
 }
 
 fn part1(game: &mut Game) -> usize {
-    let mut inspections = game.get_inspections(20);
+    let mut inspections = game.get_round_inspections(20, true);
     inspections.sort();
     println!("Inspections : {:?}", inspections);
     inspections.pop().unwrap() * inspections.pop().unwrap()
 }
 
 fn part2(game: &mut Game) -> usize {
-    let mut inspections = game.get_inspections(10000);
+    let mut inspections = game.get_round_inspections(10000, false);
     inspections.sort();
     println!("Inspections : {:?}", inspections);
     inspections.pop().unwrap() * inspections.pop().unwrap()
@@ -275,117 +263,7 @@ mod tests {
 
         println!("{:#?}", game.0);
 
-        assert_eq!(
-            vec![
-                vec![20, 23, 27, 26],
-                vec![2080, 25, 167, 207, 401, 1046],
-                vec![],
-                vec![]
-            ],
-            game.get_round(1)
-        );
-
-        assert_eq!(
-            vec![
-                vec![695, 10, 71, 135, 350],
-                vec![43, 49, 58, 55, 362],
-                vec![],
-                vec![]
-            ],
-            game.get_round(2)
-        );
-        assert_eq!(
-            vec![
-                vec![16, 18, 21, 20, 122],
-                vec![1468, 22, 150, 286, 739],
-                vec![],
-                vec![]
-            ],
-            game.get_round(3)
-        );
-        assert_eq!(
-            vec![
-                vec![491, 9, 52, 97, 248, 34],
-                vec![39, 45, 43, 258],
-                vec![],
-                vec![]
-            ],
-            game.get_round(4)
-        );
-        assert_eq!(
-            vec![
-                vec![15, 17, 16, 88, 1037],
-                vec![20, 110, 205, 524, 72],
-                vec![],
-                vec![]
-            ],
-            game.get_round(5)
-        );
-        assert_eq!(
-            vec![
-                vec![8, 70, 176, 26, 34],
-                vec![481, 32, 36, 186, 2190],
-                vec![],
-                vec![]
-            ],
-            game.get_round(6)
-        );
-        assert_eq!(
-            vec![
-                vec![162, 12, 14, 64, 732, 17],
-                vec![148, 372, 55, 72],
-                vec![],
-                vec![]
-            ],
-            game.get_round(7)
-        );
-        assert_eq!(
-            vec![
-                vec![51, 126, 20, 26, 136],
-                vec![343, 26, 30, 1546, 36],
-                vec![],
-                vec![]
-            ],
-            game.get_round(8)
-        );
-        assert_eq!(
-            vec![
-                vec![116, 10, 12, 517, 14],
-                vec![108, 267, 43, 55, 288],
-                vec![],
-                vec![]
-            ],
-            game.get_round(9)
-        );
-        assert_eq!(
-            vec![
-                vec![91, 16, 20, 98],
-                vec![481, 245, 22, 26, 1092, 30],
-                vec![],
-                vec![]
-            ],
-            game.get_round(10)
-        );
-        assert_eq!(
-            vec![
-                vec![83, 44, 8, 184, 9, 20, 26, 102],
-                vec![110, 36],
-                vec![],
-                vec![]
-            ],
-            game.get_round(15)
-        );
-        assert_eq!(
-            vec![
-                vec![10, 12, 14, 26, 34],
-                vec![245, 93, 53, 199, 115],
-                vec![],
-                vec![]
-            ],
-            game.get_round(20)
-        );
-
         assert_eq!(10605, part1(&mut game));
-        println!("{:?}", game.get_inspections(20));
+        println!("{:?}", game.get_round_inspections(20, false));
     }
 }
